@@ -237,7 +237,8 @@ Abstract: {paper['abstract']}"""
             if attempt == 2:
                 print(f"  ✗ Failed to summarise '{paper['title'][:60]}': {e}")
                 return None
-            time.sleep(2 ** attempt)
+            wait = 15 if "429" in str(e) else 2 ** attempt
+            time.sleep(wait)
     return None
 
 
@@ -283,7 +284,7 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
             luminal_gi.append(result)
         elif cat == "guideline":
             guidelines.append(result)
-        time.sleep(0.3)  # gentle rate limiting
+        time.sleep(5)  # Gemini free tier limit: 15 requests/min → 1 per 4s, use 5s to be safe
 
     # Sort: practice-changing first, then high quality, then subcategory
     quality_order = {"high": 0, "moderate": 1, "preliminary": 2}
