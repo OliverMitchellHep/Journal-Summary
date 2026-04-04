@@ -5,7 +5,7 @@ Run manually: python main.py
 Or scheduled via GitHub Actions (see .github/workflows/weekly_digest.yml)
 
 Required environment variables:
-  GEMINI_API_KEY      – your free Google Gemini API key (aistudio.google.com)
+  ANTHROPIC_API_KEY   – your Anthropic API key (console.anthropic.com)
   SENDER_EMAIL        – email address to send from
   SMTP_PASSWORD       – app password for SMTP sender
   RECIPIENT_EMAIL     – your email address (can be same as sender)
@@ -28,7 +28,7 @@ from send_email import send_digest_smtp
 
 def main():
     # ── Config from environment ────────────────────────────────────────────────
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     sender_email = os.environ.get("SENDER_EMAIL")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     recipient_email = os.environ.get("RECIPIENT_EMAIL", sender_email)
@@ -37,7 +37,7 @@ def main():
     days_back = int(os.environ.get("DAYS_BACK", "7"))
 
     if not api_key:
-        print("❌ GEMINI_API_KEY not set")
+        print("❌ ANTHROPIC_API_KEY not set")
         sys.exit(1)
     if not sender_email or not smtp_password:
         print("❌ SENDER_EMAIL and SMTP_PASSWORD must be set")
