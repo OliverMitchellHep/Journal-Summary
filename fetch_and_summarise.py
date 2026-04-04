@@ -205,40 +205,39 @@ If practice_changing is false, set this to empty string ""."""
 
 
 def summarise_paper(paper: dict, api_key: str) -> Optional[dict]:
-    """Call Gemini Flash to categorise and summarise a paper. Returns enriched dict or None."""
-    # Gemini takes system + user as a combined prompt
-    full_prompt = f"""{SYSTEM_PROMPT}
-
-Title: {paper['title']}
+    prompt = f"""Title: {paper['title']}
 
 Abstract: {paper['abstract']}"""
 
-    body = {
-        "contents": [{"parts": [{"text": full_prompt}]}],
-        "generationConfig": {
-            "temperature": 0.1,       # low temp for consistent structured output
-            "maxOutputTokens": 700,
-        },
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
     }
-
-    url = f"{GEMINI_API}?key={api_key}"
+    body = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 700,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": prompt}],
+    }
 
     for attempt in range(3):
         try:
-            r = requests.post(url, json=body, timeout=30)
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers, json=body, timeout=30
+            )
             r.raise_for_status()
-            raw = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # Strip any accidental markdown fences
+            raw = r.json()["content"][0]["text"].strip()
             raw = raw.replace("```json", "").replace("```", "").strip()
             summary = json.loads(raw)
             paper.update(summary)
             return paper
         except Exception as e:
             if attempt == 2:
-                print(f"  ✗ Failed to summarise '{paper['title'][:60]}': {e}")
+                print(f"  ✗ Failed: {e}")
                 return None
-            wait = 15 if "429" in str(e) else 2 ** attempt
-            time.sleep(wait)
+            time.sleep(2 ** attempt)
     return None
 
 
