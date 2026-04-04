@@ -261,7 +261,7 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
     articles = fetch_abstracts(pmids)
     print(f"   {len(articles)} articles with usable abstracts")
 
-    print("🤖 Summarising with Claude...")
+    print("🤖 Summarising with Gemini...")
     hepatology = []
     luminal_gi = []
     guidelines = []
@@ -270,6 +270,7 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
     for i, paper in enumerate(articles):
         print(f"   [{i+1}/{len(articles)}] {paper['title'][:70]}...")
         result = summarise_paper(paper, api_key)
+        time.sleep(5)  # MUST be here — always pause whether success or failure
         if result is None:
             continue
         cat = result.get("category", "exclude")
@@ -284,8 +285,7 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
             luminal_gi.append(result)
         elif cat == "guideline":
             guidelines.append(result)
-        time.sleep(5)  # Gemini free tier limit: 15 requests/min → 1 per 4s, use 5s to be safe
-
+            
     # Sort: practice-changing first, then high quality, then subcategory
     quality_order = {"high": 0, "moderate": 1, "preliminary": 2}
     for lst in [hepatology, luminal_gi]:
