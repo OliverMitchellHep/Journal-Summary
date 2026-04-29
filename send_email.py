@@ -1,7 +1,8 @@
 """
 send_email.py
-Sends the weekly digest PDF via SMTP (works with Gmail, NHS mail, Outlook etc.)
-Optionally supports SendGrid for more reliable delivery.
+Sends the weekly digest PDF via SMTP.
+Supports a mailing list — set RECIPIENT_EMAILS as a comma-separated list of addresses.
+e.g. RECIPIENT_EMAILS=you@nhs.net,colleague@nhs.net,another@gmail.com
 """
 
 import smtplib
@@ -49,10 +50,6 @@ HTML_TEMPLATE = """
     .preliminary {{ background: #fee2e2; color: #DC2626; }}
     .footer {{ background: #f3f4f6; padding: 16px 32px; font-size: 11px;
                color: #9CA3AF; text-align: center; line-height: 1.6; }}
-    .cta {{ text-align: center; margin: 20px 0; }}
-    .cta-btn {{ background: #1B3A5C; color: white; padding: 12px 28px;
-                border-radius: 8px; text-decoration: none; font-weight: 600;
-                font-size: 13px; display: inline-block; }}
   </style>
 </head>
 <body>
@@ -63,24 +60,22 @@ HTML_TEMPLATE = """
     </div>
     <div class="stats">
       <div class="stat"><div class="num">{hep_count}</div><div class="lbl">Hepatology</div></div>
+      <div class="stat"><div class="num">{hpb_count}</div><div class="lbl">HPB</div></div>
       <div class="stat"><div class="num">{gi_count}</div><div class="lbl">Luminal GI</div></div>
-      <div class="stat"><div class="num">{high_count}</div><div class="lbl">High Quality</div></div>
+      <div class="stat"><div class="num">{endo_count}</div><div class="lbl">Endoscopy</div></div>
     </div>
     <div class="body">
       <p style="font-size:13px; margin-top:0;">Your weekly digest is attached as a PDF.
-      Below is a quick summary of the top highlights.</p>
-
+      Below is a quick summary of the top highlights from each section.</p>
       {hep_section}
+      {hpb_section}
       {gi_section}
-
-      <div class="cta">
-        <p style="font-size:12px; color:#6B7280;">Full summaries, clinical relevance notes,
-        and PubMed links are in the attached PDF.</p>
-      </div>
+      {endo_section}
     </div>
     <div class="footer">
       AI-generated from PubMed abstracts for educational purposes only.<br>
-      Not clinical advice. Always consult full-text articles before applying findings to patient care.
+      Not clinical advice. Always consult full-text articles before applying findings to patient care.<br>
+      To unsubscribe from this digest, contact the sender.
     </div>
   </div>
 </body>
@@ -106,13 +101,14 @@ SECTION_BLOCK = """
 """
 
 
-def _build_section_html(title, papers, max_papers=5):
+def _build_section_html(title, papers, max_papers=3):
+    if not papers:
+        return ""
     paper_html = ""
-    high_first = sorted(papers, key=lambda x: {"high": 0, "moderate": 1, "preliminary": 2}
-                         .get(x.get("quality_flag", "moderate"), 1))
-    for p in high_first[:max_papers]:
+    for p in papers[:max_papers]:
         qf = p.get("quality_flag", "moderate")
-        q_label = {"high": "High Quality", "moderate": "Moderate", "preliminary": "Preliminary"}.get(qf, qf)
+        q_label = {"high": "High Quality", "moderate": "Moderate",
+                   "preliminary": "Preliminary"}.get(qf, qf)
         paper_html += PAPER_ROW.format(
             quality_class=qf,
             quality_label=q_label,
@@ -123,78 +119,99 @@ def _build_section_html(title, papers, max_papers=5):
             headline=p.get("headline", ""),
         )
     if len(papers) > max_papers:
-        paper_html += f'<p style="font-size:11px;color:#6B7280;margin:6px 0 0 4px;">+ {len(papers)-max_papers} more papers in the full PDF</p>'
+        paper_html += (f'<p style="font-size:11px;color:#6B7280;margin:6px 0 0 4px;">'
+                       f'+ {len(papers)-max_papers} more in the full PDF</p>')
     return SECTION_BLOCK.format(title=title, papers=paper_html)
 
 
 def build_html_body(digest_data):
     hepatology = digest_data.get("hepatology", [])
-    luminal_gi = digest_data.get("luminal_gi", [])
-    all_papers = hepatology + luminal_gi
-    high_count = sum(1 for p in all_papers if p.get("quality_flag") == "high")
-
-    hep_section = _build_section_html("🫀 Hepatology Highlights", hepatology) if hepatology else ""
-    gi_section = _build_section_html("🔬 Luminal GI Highlights", luminal_gi) if luminal_gi else ""
+    hpb        = digest_data.get("hpb", [])
+    luminal    = digest_data.get("luminal", [])
+    endoscopy  = digest_data.get("endoscopy", [])
+    total      = len(hepatology) + len(hpb) + len(luminal) + len(endoscopy)
 
     return HTML_TEMPLATE.format(
         date=datetime.now().strftime("%d %B %Y"),
-        total=digest_data.get("metadata", {}).get("total_fetched", len(all_papers)),
+        total=total,
         hep_count=len(hepatology),
-        gi_count=len(luminal_gi),
-        high_count=high_count,
-        hep_section=hep_section,
-        gi_section=gi_section,
+        hpb_count=len(hpb),
+        gi_count=len(luminal),
+        endo_count=len(endoscopy),
+        hep_section=_build_section_html("🫀 Hepatology", hepatology),
+        hpb_section=_build_section_html("🔬 HPB", hpb),
+        gi_section=_build_section_html("🔭 Luminal GI", luminal),
+        endo_section=_build_section_html("🩺 Endoscopy", endoscopy),
     )
 
 
 def send_digest_smtp(
     digest_data: dict,
     pdf_path: str,
-    recipient_email: str,
+    recipient_emails: list[str],
     sender_email: str,
     smtp_password: str,
     smtp_host: str = "smtp.gmail.com",
     smtp_port: int = 587,
 ):
     """
-    Send the digest via SMTP.
-    For Gmail: enable 2FA and use an App Password (not your main password).
-    For NHS mail (Outlook): smtp_host='smtp.office365.com', smtp_port=587
+    Send the digest to a list of recipients via SMTP.
+    Each recipient gets their own individual email (BCC-style privacy).
     """
-    end_date = datetime.now()
+    end_date   = datetime.now()
     start_date = end_date - timedelta(days=7)
-    subject = (
-        f"GI Research Digest | {start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
-    )
+    subject    = (f"GI Research Digest | "
+                  f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}")
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = sender_email
-    msg["To"] = recipient_email
-
-    # Plain text fallback
-    plain = (
-        f"Your weekly GI Research Digest is attached.\n\n"
-        f"Hepatology: {len(digest_data.get('hepatology', []))} papers\n"
-        f"Luminal GI: {len(digest_data.get('luminal_gi', []))} papers\n\n"
-        f"Please open the attached PDF for full summaries."
-    )
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(build_html_body(digest_data), "html"))
-
-    # Attach PDF
-    with open(pdf_path, "rb") as f:
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(f.read())
-    encoders.encode_base64(part)
+    html_body = build_html_body(digest_data)
+    pdf_bytes = open(pdf_path, "rb").read()
     pdf_filename = Path(pdf_path).name
-    part.add_header("Content-Disposition", f'attachment; filename="{pdf_filename}"')
-    msg.attach(part)
+
+    total     = len(recipient_emails)
+    successes = 0
+    failures  = []
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.ehlo()
         server.starttls()
         server.login(sender_email, smtp_password)
-        server.sendmail(sender_email, recipient_email, msg.as_string())
 
-    print(f"✅ Email sent to {recipient_email}")
+        for recipient in recipient_emails:
+            recipient = recipient.strip()
+            if not recipient:
+                continue
+            try:
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = subject
+                msg["From"]    = sender_email
+                msg["To"]      = recipient
+
+                plain = (
+                    f"Your weekly GI Research Digest is attached.\n\n"
+                    f"Hepatology: {len(digest_data.get('hepatology', []))} papers\n"
+                    f"HPB: {len(digest_data.get('hpb', []))} papers\n"
+                    f"Luminal GI: {len(digest_data.get('luminal', []))} papers\n"
+                    f"Endoscopy: {len(digest_data.get('endoscopy', []))} papers\n\n"
+                    f"Please open the attached PDF for full summaries."
+                )
+                msg.attach(MIMEText(plain, "plain"))
+                msg.attach(MIMEText(html_body, "html"))
+
+                # Attach PDF
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(pdf_bytes)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f'attachment; filename="{pdf_filename}"')
+                msg.attach(part)
+
+                server.sendmail(sender_email, recipient, msg.as_string())
+                print(f"   ✅ Sent to {recipient}")
+                successes += 1
+
+            except Exception as e:
+                print(f"   ✗ Failed to send to {recipient}: {e}")
+                failures.append(recipient)
+
+    print(f"\n📧 Email summary: {successes}/{total} sent successfully")
+    if failures:
+        print(f"   Failed recipients: {', '.join(failures)}")
