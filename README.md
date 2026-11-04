@@ -148,11 +148,23 @@ gi-digest/
 ├── generate_pdf.py          # ReportLab PDF builder
 ├── send_email.py            # SMTP email sender
 ├── requirements.txt
+├── assets/
+│   ├── brand/               # Rex Hepatis crown logo (PDF + email)
+│   └── fonts/               # Newsreader + IBM Plex Sans (SIL Open Font License)
 ├── .github/
 │   └── workflows/
 │       └── weekly_digest.yml   # GitHub Actions scheduler
 └── output/                  # PDFs saved here (gitignored)
 ```
+
+---
+
+## Branding
+
+The PDF and email use the [Rex Hepatis](https://rexhepatis.org) brand: navy `#0E1A2E`,
+blue `#2C6DBA` and gold `#C99A2E`, Newsreader headings with IBM Plex Sans text, and the
+crown logo. Colours are set at the top of `generate_pdf.py` and in the email
+template in `send_email.py`.
 
 ---
 

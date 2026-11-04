@@ -2,6 +2,8 @@
 generate_pdf.py
 Generates a clean, professional PDF digest from the summarised paper data.
 Uses ReportLab Platypus for flowing multi-page layout.
+Styled with the Rex Hepatis (rexhepatis.org) brand: navy, blue and gold,
+Newsreader headings, IBM Plex Sans text, and the crown logo.
 """
 
 from reportlab.lib.pagesizes import A4
@@ -11,9 +13,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    HRFlowable, PageBreak, KeepTogether
+    HRFlowable, PageBreak, KeepTogether, Image
 )
-from reportlab.platypus.flowables import BalancedColumns
 from reportlab.lib.colors import HexColor
 from datetime import datetime, timedelta
 from xml.sax.saxutils import escape
@@ -21,29 +22,74 @@ import os
 
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.fonts import addMapping
 
-# ── Colour palette ─────────────────────────────────────────────────────────────
-NAVY       = HexColor("#1B3A5C")
-TEAL       = HexColor("#0B7285")
-LIGHT_TEAL = HexColor("#E8F4F7")
-GOLD       = HexColor("#C8860A")
-DARK_GOLD  = HexColor("#92610A")
-LIGHT_GOLD = HexColor("#FDF6E3")
-DEEP_GOLD  = HexColor("#78450A")
-MID_GREY   = HexColor("#6B7280")
-LIGHT_GREY = HexColor("#F3F4F6")
-RED_FLAG   = HexColor("#DC2626")
-GREEN_FLAG = HexColor("#16A34A")
-AMBER_FLAG = HexColor("#D97706")
+# ── Rex Hepatis brand ──────────────────────────────────────────────────────────
+ASSETS     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+CROWN_PATH = os.path.join(ASSETS, "brand", "crown.png")
+CROWN_RATIO = 186 / 274          # height / width of crown.png
+SITE_URL   = "https://rexhepatis.org"
+
+# Colours taken from rexhepatis.org's stylesheet
+NAVY       = HexColor("#0E1A2E")   # --navy
+NAVY_2     = HexColor("#13223A")   # --navy-2
+BLUE       = HexColor("#2C6DBA")   # --acc
+BLUE_LT    = HexColor("#6FA8EC")   # --acc-lt
+LIGHT_BLUE = HexColor("#EBF2FB")
+GOLD       = HexColor("#C99A2E")   # --gold
+DARK_GOLD  = HexColor("#7C560E")   # crown shadow
+LIGHT_GOLD = HexColor("#FBF5E6")
+DEEP_GOLD  = HexColor("#6E4B0B")
+MID_GREY   = HexColor("#4A5872")   # --ink-2
+BODY_INK   = HexColor("#33415C")
+RULE       = HexColor("#D5DCE8")   # --rule
+LIGHT_GREY = HexColor("#F3F5F9")
+RED_FLAG   = HexColor("#C0262D")
+GREEN_FLAG = HexColor("#1E8A4C")
+AMBER_FLAG = HexColor("#B7791F")
 WHITE      = colors.white
 BLACK      = colors.black
+
+# Fonts (SIL Open Font License, see assets/fonts/OFL-*.txt)
+SANS        = "Plex"
+SANS_BOLD   = "Plex-SemiBold"
+SERIF       = "Newsreader"
+SERIF_ITAL  = "Newsreader-Italic"
+for _name, _file in [
+    (SANS, "IBMPlexSans-Regular.ttf"),
+    (SANS_BOLD, "IBMPlexSans-SemiBold.ttf"),
+    ("Plex-Italic", "IBMPlexSans-Italic.ttf"),
+    ("Plex-SemiBoldItalic", "IBMPlexSans-SemiBoldItalic.ttf"),
+    (SERIF, "Newsreader-SemiBold.ttf"),
+    (SERIF_ITAL, "Newsreader-Italic.ttf"),
+]:
+    pdfmetrics.registerFont(TTFont(_name, os.path.join(ASSETS, "fonts", _file)))
+# So <b> and <i> inside a paragraph pick the right Plex / Newsreader face
+for _fam, _n, _b, _i, _bi in [
+    (SANS, SANS, SANS_BOLD, "Plex-Italic", "Plex-SemiBoldItalic"),
+    (SANS_BOLD, SANS, SANS_BOLD, "Plex-Italic", "Plex-SemiBoldItalic"),
+    (SERIF, SERIF, SERIF, SERIF_ITAL, SERIF_ITAL),
+]:
+    addMapping(_fam, 0, 0, _n)
+    addMapping(_fam, 1, 0, _b)
+    addMapping(_fam, 0, 1, _i)
+    addMapping(_fam, 1, 1, _bi)
+# Styles created without a parent default to Plex instead of Helvetica
+ParagraphStyle.defaults["fontName"] = SANS
+ParagraphStyle.defaults["bulletFontName"] = SANS
+
+
+def crown(height: float) -> str:
+    """Inline crown logo for use inside a Paragraph."""
+    width = height / CROWN_RATIO
+    return f'<img src="{CROWN_PATH}" width="{width:.1f}" height="{height:.1f}" valign="middle"/>'
 
 W, H = A4
 MARGIN = 18 * mm
 
-# Helvetica has no star or dot glyphs, so those characters came out as black
-# boxes. Embed DejaVu Sans for the symbols when the system has it (GitHub's
-# Ubuntu runners do); otherwise leave the symbols out rather than print boxes.
+# The brand fonts have no dot glyph for the quality badges. Embed DejaVu Sans
+# for it when the system has it (GitHub's Ubuntu runners do); otherwise leave
+# it out rather than print a black box.
 _SYMBOL_FONT_PATHS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
@@ -62,7 +108,6 @@ for _path in _SYMBOL_FONT_PATHS:
         _HAS_SYMBOL_FONT = True
         break
 
-STAR = _symbol("★")
 DOT  = _symbol("●")
 
 QUALITY_COLOURS = {
@@ -88,63 +133,63 @@ def build_styles():
 
     styles = {
         "cover_title": ParagraphStyle(
-            "cover_title", parent=base["Title"],
-            fontSize=28, textColor=WHITE, alignment=TA_CENTER,
-            spaceAfter=6, leading=34,
+            "cover_title", parent=base["Title"], fontName=SERIF,
+            fontSize=34, textColor=WHITE, alignment=TA_LEFT,
+            spaceAfter=0, leading=40,
         ),
         "cover_sub": ParagraphStyle(
-            "cover_sub", parent=base["Normal"],
-            fontSize=13, textColor=HexColor("#BDD6E6"), alignment=TA_CENTER,
-            spaceAfter=4,
+            "cover_sub", parent=base["Normal"], fontName=SANS,
+            fontSize=12, textColor=HexColor("#C9D4E5"), alignment=TA_LEFT,
+            spaceAfter=0, leading=16,
         ),
         "cover_date": ParagraphStyle(
-            "cover_date", parent=base["Normal"],
-            fontSize=11, textColor=HexColor("#93C5D8"), alignment=TA_CENTER,
+            "cover_date", parent=base["Normal"], fontName=SANS,
+            fontSize=11, textColor=BLUE_LT, alignment=TA_CENTER,
         ),
         "section_header": ParagraphStyle(
-            "section_header", parent=base["Heading1"],
+            "section_header", parent=base["Heading1"], fontName=SERIF,
             fontSize=18, textColor=WHITE, alignment=TA_LEFT,
             spaceAfter=0, spaceBefore=0, leading=22,
         ),
         "subsection": ParagraphStyle(
             "subsection", parent=base["Heading2"],
-            fontSize=12, textColor=TEAL, spaceBefore=10, spaceAfter=4,
-            leading=16, fontName="Helvetica-Bold",
+            fontSize=12, textColor=BLUE, spaceBefore=10, spaceAfter=4,
+            leading=16, fontName=SANS_BOLD,
         ),
         "paper_title": ParagraphStyle(
             "paper_title", parent=base["Normal"],
-            fontSize=10.5, textColor=NAVY, fontName="Helvetica-Bold",
+            fontSize=10.5, textColor=NAVY, fontName=SANS_BOLD,
             spaceBefore=4, spaceAfter=2, leading=14,
         ),
         "meta": ParagraphStyle(
-            "meta", parent=base["Normal"],
+            "meta", parent=base["Normal"], fontName=SANS,
             fontSize=8.5, textColor=MID_GREY, spaceAfter=4, leading=12,
         ),
         "body": ParagraphStyle(
-            "body", parent=base["Normal"],
-            fontSize=9.5, textColor=HexColor("#374151"), alignment=TA_JUSTIFY,
+            "body", parent=base["Normal"], fontName=SANS,
+            fontSize=9.5, textColor=BODY_INK, alignment=TA_JUSTIFY,
             spaceAfter=3, leading=14,
         ),
         "label": ParagraphStyle(
             "label", parent=base["Normal"],
-            fontSize=8.5, textColor=TEAL, fontName="Helvetica-Bold",
+            fontSize=8.5, textColor=BLUE, fontName=SANS_BOLD,
             spaceAfter=1, leading=12,
         ),
         "toc_entry": ParagraphStyle(
-            "toc_entry", parent=base["Normal"],
+            "toc_entry", parent=base["Normal"], fontName=SANS,
             fontSize=10, textColor=NAVY, spaceAfter=3, leading=14,
         ),
         "highlight_title": ParagraphStyle(
             "highlight_title", parent=base["Normal"],
-            fontSize=10, textColor=NAVY, fontName="Helvetica-Bold",
+            fontSize=10, textColor=NAVY, fontName=SANS_BOLD,
             spaceAfter=2, leading=13,
         ),
         "highlight_body": ParagraphStyle(
-            "highlight_body", parent=base["Normal"],
-            fontSize=9, textColor=HexColor("#374151"), leading=13,
+            "highlight_body", parent=base["Normal"], fontName=SANS,
+            fontSize=9, textColor=BODY_INK, leading=13,
         ),
         "footer": ParagraphStyle(
-            "footer", parent=base["Normal"],
+            "footer", parent=base["Normal"], fontName=SANS,
             fontSize=7.5, textColor=MID_GREY, alignment=TA_CENTER,
         ),
     }
@@ -170,16 +215,26 @@ class DigestDoc(SimpleDocTemplate):
     def _drawFooter(self):
         c = self.canv
         c.saveState()
-        c.setFillColor(MID_GREY)
-        c.setFont("Helvetica", 7.5)
         page_num = c.getPageNumber()
-        footer_text = (
-            f"GI Research Digest  |  Week ending {datetime.now().strftime('%d %B %Y')}"
-            f"  |  Page {page_num}"
-        )
-        c.drawCentredString(W / 2, 13 * mm, footer_text)
-        c.setStrokeColor(LIGHT_GREY)
+        c.setStrokeColor(RULE)
+        c.setLineWidth(0.5)
         c.line(MARGIN, 17 * mm, W - MARGIN, 17 * mm)
+        # Left: crown + "Rex Hepatis"; right: date and page number
+        crown_h = 3.2 * mm
+        c.drawImage(CROWN_PATH, MARGIN, 11.6 * mm, width=crown_h / CROWN_RATIO,
+                    height=crown_h, mask="auto")
+        x = MARGIN + crown_h / CROWN_RATIO + 1.5 * mm
+        c.setFillColor(NAVY)
+        c.setFont(SERIF, 8.5)
+        c.drawString(x, 12.4 * mm, "Rex Hepatis")
+        x += pdfmetrics.stringWidth("Rex Hepatis", SERIF, 8.5) + 3 * mm
+        c.setFillColor(MID_GREY)
+        c.setFont(SANS, 7.5)
+        c.drawString(x, 12.4 * mm, "GI Research Digest  ·  rexhepatis.org")
+        c.drawRightString(
+            W - MARGIN, 12.4 * mm,
+            f"Week ending {datetime.now().strftime('%d %B %Y')}  |  Page {page_num}",
+        )
         c.restoreState()
 
 
@@ -188,35 +243,42 @@ class DigestDoc(SimpleDocTemplate):
 def cover_page(styles, metadata):
     """Returns flowables for the cover page."""
     elements = []
-    elements.append(Spacer(1, 40 * mm))
+    elements.append(Spacer(1, 22 * mm))
 
-    # Navy banner
-    banner_data = [[Paragraph("GI Research Digest", styles["cover_title"])]]
-    banner = Table(banner_data, colWidths=[W - 2 * MARGIN])
-    banner.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
-        ("TOPPADDING", (0, 0), (-1, -1), 18),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 18),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-        ("ROUNDEDCORNERS", (0, 0), (-1, -1), [6, 6, 0, 0]),
-    ]))
-    elements.append(banner)
+    # Crown logo and "Rex Hepatis" wordmark
+    logo_w = 30 * mm
+    elements.append(Image(CROWN_PATH, width=logo_w, height=logo_w * CROWN_RATIO))
+    elements.append(Spacer(1, 3 * mm))
+    elements.append(Paragraph("Rex Hepatis", ParagraphStyle(
+        "brand", fontName=SERIF, fontSize=22, leading=26, textColor=NAVY, alignment=TA_CENTER
+    )))
+    elements.append(Paragraph("Hepatobiliary learning, made accessible", ParagraphStyle(
+        "tagline", fontName=SERIF_ITAL, fontSize=11, leading=15, textColor=MID_GREY,
+        alignment=TA_CENTER
+    )))
+    elements.append(Spacer(1, 12 * mm))
 
-    # Teal sub-banner
+    # Navy title block with the site's blue accent rule
     end_date = datetime.now()
     start_date = end_date - timedelta(days=metadata.get("period_days", 7))
     date_str = f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
-    sub_data = [[Paragraph(f"Weekly Literature Review  |  {date_str}", styles["cover_sub"])]]
-    sub = Table(sub_data, colWidths=[W - 2 * MARGIN])
-    sub.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), TEAL),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ("ROUNDEDCORNERS", (0, 0), (-1, -1), [0, 0, 6, 6]),
+    banner = Table([
+        [Paragraph("GI Research Digest", styles["cover_title"])],
+        [Paragraph(f"Weekly literature review  ·  {date_str}", styles["cover_sub"])],
+    ], colWidths=[W - 2 * MARGIN])
+    banner.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
+        ("LINEBEFORE", (0, 0), (0, -1), 4, BLUE),
+        ("LINEBELOW", (0, -1), (-1, -1), 3, BLUE),
+        ("TOPPADDING", (0, 0), (-1, 0), 22),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
+        ("TOPPADDING", (0, 1), (-1, 1), 2),
+        ("BOTTOMPADDING", (0, 1), (-1, 1), 22),
+        ("LEFTPADDING", (0, 0), (-1, -1), 20),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 20),
     ]))
-    elements.append(sub)
-    elements.append(Spacer(1, 20 * mm))
+    elements.append(banner)
+    elements.append(Spacer(1, 14 * mm))
 
     # Stats boxes
     hep_count = metadata.get("hep_count", 0)
@@ -225,8 +287,8 @@ def cover_page(styles, metadata):
 
     stats = [
         [
-            _stat_box(str(hep_count), "Hepatology", LIGHT_TEAL, TEAL),
-            _stat_box(str(gi_count), "Luminal / HPB / Endo", LIGHT_GOLD, GOLD),
+            _stat_box(str(hep_count), "Hepatology", LIGHT_BLUE, BLUE),
+            _stat_box(str(gi_count), "Luminal / HPB / Endo", LIGHT_GOLD, DARK_GOLD),
             _stat_box(str(hep_count + gi_count), "Total papers", LIGHT_GREY, NAVY),
         ]
     ]
@@ -258,8 +320,14 @@ def cover_page(styles, metadata):
     )
     elements.append(Paragraph(disclaimer, ParagraphStyle(
         "disc", fontSize=8, textColor=MID_GREY, alignment=TA_CENTER,
-        leading=12, borderColor=LIGHT_GREY
+        leading=12
     )))
+    elements.append(Spacer(1, 6 * mm))
+    elements.append(Paragraph(
+        f'More hepatobiliary teaching at <link href="{SITE_URL}" color="#2C6DBA">'
+        f'<b>rexhepatis.org</b></link>',
+        ParagraphStyle("site", fontSize=9, textColor=MID_GREY, alignment=TA_CENTER, leading=13)
+    ))
     elements.append(PageBreak())
     return elements
 
@@ -267,8 +335,8 @@ def cover_page(styles, metadata):
 def _stat_box(value, label, bg, fg):
     """Returns a Table cell with a coloured stat box."""
     data = [
-        [Paragraph(f"<b>{value}</b>", ParagraphStyle("sv", fontSize=24, textColor=fg,
-                                                       alignment=TA_CENTER))],
+        [Paragraph(value, ParagraphStyle("sv", fontName=SERIF, fontSize=26, leading=30,
+                                         textColor=fg, alignment=TA_CENTER))],
         [Paragraph(label, ParagraphStyle("sl", fontSize=8.5, textColor=fg,
                                           alignment=TA_CENTER))],
     ]
@@ -286,23 +354,23 @@ def section_header_block(title, subtitle, colour):
     """Coloured section header banner."""
     data = [[
         Paragraph(title, ParagraphStyle(
-            "sh", fontSize=18, textColor=WHITE, fontName="Helvetica-Bold",
+            "sh", fontSize=18, textColor=WHITE, fontName=SERIF,
             leading=22
         )),
         Paragraph(subtitle, ParagraphStyle(
-            "ss", fontSize=9, textColor=HexColor("#BDD6E6"), alignment=TA_RIGHT,
+            "ss", fontSize=9, textColor=HexColor("#C9D4E5"), alignment=TA_RIGHT,
             leading=13
         )),
     ]]
     t = Table(data, colWidths=[100 * mm, W - 2 * MARGIN - 100 * mm])
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colour),
+        ("LINEBEFORE", (0, 0), (0, -1), 4, BLUE),
         ("TOPPADDING", (0, 0), (-1, -1), 12),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
         ("LEFTPADDING", (0, 0), (0, -1), 14),
         ("RIGHTPADDING", (-1, 0), (-1, -1), 14),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ROUNDEDCORNERS", (0, 0), (-1, -1), [6, 6, 6, 6]),
     ]))
     return t
 
@@ -314,8 +382,8 @@ def highlights_box(papers, styles, colour, bg):
         high_quality = papers[:3]
 
     elements = []
-    title_data = [[Paragraph(f"{STAR}  Top Highlights This Week", ParagraphStyle(
-        "ht", fontSize=10.5, textColor=colour, fontName="Helvetica-Bold"
+    title_data = [[Paragraph(f"{crown(11)}&nbsp;&nbsp;Top Highlights This Week", ParagraphStyle(
+        "ht", fontSize=10.5, textColor=colour, fontName=SANS_BOLD
     ))]]
     title_row = Table(title_data, colWidths=[W - 2 * MARGIN])
     title_row.setStyle(TableStyle([
@@ -353,12 +421,12 @@ def paper_card(paper, styles):
     qf = paper.get("quality_flag", "moderate")
     q_colour, q_label = QUALITY_COLOURS.get(qf, QUALITY_COLOURS["moderate"])
     badge_style = ParagraphStyle("badge", fontSize=7.5, textColor=q_colour,
-                                  fontName="Helvetica-Bold")
+                                  fontName=SANS_BOLD, alignment=TA_RIGHT)
 
     # Header row: subcategory tag + quality badge
     header_data = [[
         Paragraph(f"[{esc(paper.get('subcategory'))}]", ParagraphStyle(
-            "tag", fontSize=8, textColor=TEAL, fontName="Helvetica-Bold"
+            "tag", fontSize=8, textColor=BLUE, fontName=SANS_BOLD
         )),
         Paragraph(q_label, badge_style),
     ]]
@@ -399,12 +467,12 @@ def paper_card(paper, styles):
 
     # PubMed link
     elements.append(Paragraph(
-        f'<link href="{esc(paper.get("url"))}" color="#0B7285">View on PubMed &gt;</link>',
-        ParagraphStyle("link", fontSize=8.5, textColor=TEAL, spaceAfter=6)
+        f'<link href="{esc(paper.get("url"))}" color="#2C6DBA">View on PubMed &gt;</link>',
+        ParagraphStyle("link", fontSize=8.5, textColor=BLUE, spaceAfter=6)
     ))
 
     # Divider
-    elements.append(HRFlowable(width="100%", thickness=0.5, color=LIGHT_GREY, spaceAfter=6))
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=RULE, spaceAfter=6))
 
     return KeepTogether(elements)
 
@@ -416,15 +484,16 @@ def practice_changing_card(paper, styles):
     """
     elements = []
 
-    # Gold header banner
-    banner_text = f"{STAR * 3}  NOTABLE  {STAR * 3}"
+    # Navy header banner with the gold crown
+    banner_text = f"{crown(13)}&nbsp;&nbsp;&nbsp;NOTABLE&nbsp;&nbsp;&nbsp;{crown(13)}"
     banner_data = [[Paragraph(banner_text, ParagraphStyle(
-        "pc_banner", fontSize=10, textColor=WHITE, fontName="Helvetica-Bold",
-        alignment=TA_CENTER, leading=14
+        "pc_banner", fontSize=10.5, textColor=GOLD, fontName=SANS_BOLD,
+        alignment=TA_CENTER, leading=16
     ))]]
     banner = Table(banner_data, colWidths=[W - 2 * MARGIN])
     banner.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), GOLD),
+        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
+        ("BOX", (0, 0), (-1, -1), 1.5, GOLD),
         ("TOPPADDING", (0, 0), (-1, -1), 7),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ("ROUNDEDCORNERS", (0, 0), (-1, -1), [6, 6, 0, 0]),
@@ -438,7 +507,7 @@ def practice_changing_card(paper, styles):
     content_rows.append([Paragraph(
         esc(paper.get("title")),
         ParagraphStyle("pc_title", fontSize=10.5, textColor=DARK_GOLD,
-                       fontName="Helvetica-Bold", leading=14, spaceAfter=2)
+                       fontName=SANS_BOLD, leading=14, spaceAfter=2)
     )])
 
     # Meta
@@ -451,7 +520,7 @@ def practice_changing_card(paper, styles):
     # Headline finding
     content_rows.append([Paragraph(
         f"<b>Finding:</b>  {esc(paper.get('headline'))}",
-        ParagraphStyle("pc_body", fontSize=9.5, textColor=HexColor("#374151"),
+        ParagraphStyle("pc_body", fontSize=9.5, textColor=BODY_INK,
                        leading=14, spaceAfter=4, alignment=TA_JUSTIFY)
     )])
 
@@ -459,12 +528,12 @@ def practice_changing_card(paper, styles):
     if paper.get("key_findings"):
         content_rows.append([Paragraph(
             "<b>Key findings:</b>",
-            ParagraphStyle("pc_lbl", fontSize=8.5, textColor=GOLD,
-                           fontName="Helvetica-Bold", leading=12, spaceAfter=1)
+            ParagraphStyle("pc_lbl", fontSize=8.5, textColor=DARK_GOLD,
+                           fontName=SANS_BOLD, leading=12, spaceAfter=1)
         )])
         content_rows.append([Paragraph(
             esc(paper["key_findings"]),
-            ParagraphStyle("pc_body2", fontSize=9.5, textColor=HexColor("#374151"),
+            ParagraphStyle("pc_body2", fontSize=9.5, textColor=BODY_INK,
                            leading=14, spaceAfter=4, alignment=TA_JUSTIFY)
         )])
 
@@ -488,8 +557,8 @@ def practice_changing_card(paper, styles):
 
     # PubMed link
     content_rows.append([Paragraph(
-        f'<link href="{esc(paper.get("url"))}" color="#C8860A">View on PubMed &gt;</link>',
-        ParagraphStyle("pc_link", fontSize=8.5, textColor=GOLD, spaceAfter=2)
+        f'<link href="{esc(paper.get("url"))}" color="#7C560E">View on PubMed &gt;</link>',
+        ParagraphStyle("pc_link", fontSize=8.5, textColor=DARK_GOLD, spaceAfter=2)
     )])
 
     content = Table(content_rows, colWidths=[W - 2 * MARGIN])
@@ -498,7 +567,7 @@ def practice_changing_card(paper, styles):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("LEFTPADDING", (0, 0), (-1, -1), 12),
         ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-        ("BACKGROUND", (0, 0), (-1, -1), HexColor("#FFFDF5")),
+        ("BACKGROUND", (0, 0), (-1, -1), HexColor("#FFFDF7")),
         ("BOX", (0, 0), (-1, -1), 1.5, GOLD),
         ("ROUNDEDCORNERS", (0, 0), (-1, -1), [0, 0, 6, 6]),
     ]))
@@ -517,11 +586,11 @@ def guideline_card(guideline, styles):
         Paragraph(
             f"[{esc(guideline.get('subcategory') or 'Guideline')}]",
             ParagraphStyle("gl_tag", fontSize=8, textColor=NAVY,
-                           fontName="Helvetica-Bold")
+                           fontName=SANS_BOLD)
         ),
         Paragraph("New Guideline", ParagraphStyle(
             "gl_badge", fontSize=8, textColor=NAVY,
-            fontName="Helvetica-Bold", alignment=TA_RIGHT
+            fontName=SANS_BOLD, alignment=TA_RIGHT
         )),
     ]]
     header = Table(header_data, colWidths=[90 * mm, W - 2 * MARGIN - 90 * mm])
@@ -553,10 +622,10 @@ def guideline_card(guideline, styles):
         elements.append(Paragraph(esc(guideline["clinical_relevance"]), styles["body"]))
 
     elements.append(Paragraph(
-        f'<link href="{esc(guideline.get("url"))}" color="#0B7285">View on PubMed &gt;</link>',
-        ParagraphStyle("link", fontSize=8.5, textColor=TEAL, spaceAfter=6)
+        f'<link href="{esc(guideline.get("url"))}" color="#2C6DBA">View on PubMed &gt;</link>',
+        ParagraphStyle("link", fontSize=8.5, textColor=BLUE, spaceAfter=6)
     ))
-    elements.append(HRFlowable(width="100%", thickness=0.5, color=LIGHT_GREY, spaceAfter=6))
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=RULE, spaceAfter=6))
 
     return KeepTogether(elements)
 
@@ -565,27 +634,11 @@ def guidelines_section(guidelines, styles):
     """Full guidelines section block."""
     elements = []
 
-    # Section header — deep navy/purple to distinguish
-    GUIDELINE_COLOUR = HexColor("#3B1F6B")
-    header_data = [[
-        Paragraph("Section 5: New Society Guidelines", ParagraphStyle(
-            "gh", fontSize=18, textColor=WHITE, fontName="Helvetica-Bold", leading=22
-        )),
-        Paragraph(f"{len(guidelines)} guideline{'s' if len(guidelines) != 1 else ''}",
-                  ParagraphStyle("gs", fontSize=9, textColor=HexColor("#C4B5FD"),
-                                 alignment=TA_RIGHT, leading=13)),
-    ]]
-    header = Table(header_data, colWidths=[100 * mm, W - 2 * MARGIN - 100 * mm])
-    header.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), GUIDELINE_COLOUR),
-        ("TOPPADDING", (0, 0), (-1, -1), 12),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
-        ("LEFTPADDING", (0, 0), (0, -1), 14),
-        ("RIGHTPADDING", (-1, 0), (-1, -1), 14),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ROUNDEDCORNERS", (0, 0), (-1, -1), [6, 6, 6, 6]),
-    ]))
-    elements.append(header)
+    elements.append(section_header_block(
+        "Section 5: New Society Guidelines",
+        f"{len(guidelines)} guideline{'s' if len(guidelines) != 1 else ''}",
+        NAVY,
+    ))
     elements.append(Spacer(1, 6 * mm))
 
     # Intro note
@@ -626,7 +679,7 @@ def render_papers(papers, story, styles):
     groups = group_by_subcategory(regular_papers)
     for subcategory, grp_papers in sorted(groups.items()):
         story.append(Paragraph(esc(subcategory), styles["subsection"]))
-        story.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=4))
+        story.append(HRFlowable(width="100%", thickness=1, color=BLUE, spaceAfter=4))
         for paper in grp_papers:
             story.append(paper_card(paper, styles))
 
@@ -660,7 +713,7 @@ def generate_pdf(digest_data: dict, output_path: str) -> str:
     story.append(section_header_block("Section 1: Hepatology", f"{len(hepatology)} papers", NAVY))
     story.append(Spacer(1, 6 * mm))
     if hepatology:
-        story.extend(highlights_box(hepatology, styles, NAVY, LIGHT_TEAL))
+        story.extend(highlights_box(hepatology, styles, NAVY, LIGHT_BLUE))
         story.append(Spacer(1, 8 * mm))
         render_papers(hepatology, story, styles)
     else:
@@ -668,10 +721,10 @@ def generate_pdf(digest_data: dict, output_path: str) -> str:
     story.append(PageBreak())
 
     # ── Section 2: Luminal Gastroenterology ───────────────────────────────────
-    story.append(section_header_block("Section 2: Luminal Gastroenterology", f"{len(luminal)} papers", TEAL))
+    story.append(section_header_block("Section 2: Luminal Gastroenterology", f"{len(luminal)} papers", NAVY))
     story.append(Spacer(1, 6 * mm))
     if luminal:
-        story.extend(highlights_box(luminal, styles, TEAL, LIGHT_GOLD))
+        story.extend(highlights_box(luminal, styles, NAVY, LIGHT_BLUE))
         story.append(Spacer(1, 8 * mm))
         render_papers(luminal, story, styles)
     else:
@@ -679,12 +732,10 @@ def generate_pdf(digest_data: dict, output_path: str) -> str:
     story.append(PageBreak())
 
     # ── Section 3: HPB ────────────────────────────────────────────────────────
-    HPB_COLOUR = HexColor("#1F5C3A")
-    HPB_LIGHT  = HexColor("#E8F5EE")
-    story.append(section_header_block("Section 3: Hepatopancreatobiliary (HPB)", f"{len(hpb)} papers", HPB_COLOUR))
+    story.append(section_header_block("Section 3: Hepatopancreatobiliary (HPB)", f"{len(hpb)} papers", NAVY))
     story.append(Spacer(1, 6 * mm))
     if hpb:
-        story.extend(highlights_box(hpb, styles, HPB_COLOUR, HPB_LIGHT))
+        story.extend(highlights_box(hpb, styles, NAVY, LIGHT_BLUE))
         story.append(Spacer(1, 8 * mm))
         render_papers(hpb, story, styles)
     else:
@@ -692,12 +743,10 @@ def generate_pdf(digest_data: dict, output_path: str) -> str:
     story.append(PageBreak())
 
     # ── Section 4: Endoscopy ──────────────────────────────────────────────────
-    ENDO_COLOUR = HexColor("#6B3FA0")
-    ENDO_LIGHT  = HexColor("#F3EEFF")
-    story.append(section_header_block("Section 4: Endoscopy", f"{len(endoscopy)} papers", ENDO_COLOUR))
+    story.append(section_header_block("Section 4: Endoscopy", f"{len(endoscopy)} papers", NAVY))
     story.append(Spacer(1, 6 * mm))
     if endoscopy:
-        story.extend(highlights_box(endoscopy, styles, ENDO_COLOUR, ENDO_LIGHT))
+        story.extend(highlights_box(endoscopy, styles, NAVY, LIGHT_BLUE))
         story.append(Spacer(1, 8 * mm))
         render_papers(endoscopy, story, styles)
     else:
