@@ -1,7 +1,7 @@
 """
 fetch_and_summarise.py
 Fetches last 7 days of papers from PubMed across target GI/hepatology journals,
-summarises each with Claude Haiku, and returns structured data ready for PDF generation.
+summarises each with Claude Sonnet 5.5, and returns structured data ready for PDF generation.
 
 Paper limits: 10 hepatology+HPB, 5 luminal GI, 5 endoscopy = 20 total
 Focus: clinical studies (RCTs, cohorts, meta-analyses). Molecular/basic science excluded.
@@ -49,7 +49,7 @@ LIMITS = {
 
 PUBMED_BASE     = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 ANTHROPIC_API   = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+ANTHROPIC_MODEL = "claude-sonnet-5-5"
 
 
 # ── PubMed helpers ─────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ def parse_pubmed_xml(xml_text: str) -> list[dict]:
     return articles
 
 
-# ── Claude Haiku summarisation ─────────────────────────────────────────────────
+# ── Claude Sonnet summarisation ────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a specialist medical AI assistant helping a UK NHS consultant gastroenterologist 
 stay up to date with research. You will be given a paper title and abstract.
@@ -236,7 +236,7 @@ If false, set to ""."""
 
 
 def summarise_paper(paper: dict, api_key: str) -> Optional[dict]:
-    """Call Claude Haiku to categorise and summarise a paper."""
+    """Call Claude Sonnet to categorise and summarise a paper."""
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
@@ -251,7 +251,7 @@ def summarise_paper(paper: dict, api_key: str) -> Optional[dict]:
 
     for attempt in range(3):
         try:
-            r = requests.post(ANTHROPIC_API, headers=headers, json=body, timeout=30)
+            r = requests.post(ANTHROPIC_API, headers=headers, json=body, timeout=60)
             r.raise_for_status()
             raw = r.json()["content"][0]["text"].strip()
             raw = raw.replace("```json", "").replace("```", "").strip()
@@ -281,7 +281,7 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
     articles = fetch_abstracts(pmids)  # already sorted by journal priority
     print(f"   {len(articles)} articles with usable abstracts (sorted by journal priority)")
 
-    print("🤖 Summarising with Claude Haiku...")
+    print("🤖 Summarising with Claude Sonnet 5.5...")
     hepatology, luminal, hpb, endoscopy, guidelines = [], [], [], [], []
     excluded = 0
 

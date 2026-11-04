@@ -373,13 +373,13 @@ def paper_card(paper, styles):
 
 def practice_changing_card(paper, styles):
     """
-    Renders a gold-bordered 'Practice Changing' banner card for landmark papers.
+    Renders a gold-bordered 'Notable' banner card for landmark papers.
     Inserted above the standard paper_card.
     """
     elements = []
 
     # Gold header banner
-    banner_text = "★★★  PRACTICE CHANGING  ★★★"
+    banner_text = "★★★  NOTABLE  ★★★"
     banner_data = [[Paragraph(banner_text, ParagraphStyle(
         "pc_banner", fontSize=10, textColor=WHITE, fontName="Helvetica-Bold",
         alignment=TA_CENTER, leading=14
@@ -433,7 +433,7 @@ def practice_changing_card(paper, styles):
     # Practice-changing rationale — the special box-within-box
     if paper.get("practice_changing_reason"):
         reason_data = [[Paragraph(
-            f"<b>Why this changes practice:</b>  {paper['practice_changing_reason']}",
+            f"<b>Why this is notable:</b>  {paper['practice_changing_reason']}",
             ParagraphStyle("pc_reason", fontSize=9.5, textColor=DEEP_GOLD,
                            leading=14, alignment=TA_JUSTIFY)
         )]]
