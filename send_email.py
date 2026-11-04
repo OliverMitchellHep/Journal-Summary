@@ -6,12 +6,11 @@ e.g. RECIPIENT_EMAILS=you@nhs.net,colleague@nhs.net,another@gmail.com
 """
 
 import smtplib
-import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
+from email.mime.application import MIMEApplication
 from datetime import datetime, timedelta
+from html import escape
 from pathlib import Path
 
 
@@ -112,11 +111,11 @@ def _build_section_html(title, papers, max_papers=3):
         paper_html += PAPER_ROW.format(
             quality_class=qf,
             quality_label=q_label,
-            subcategory=p.get("subcategory", ""),
-            title=p.get("title", "")[:100] + ("..." if len(p.get("title", "")) > 100 else ""),
-            journal=p.get("journal", ""),
-            study_type=p.get("study_type", ""),
-            headline=p.get("headline", ""),
+            subcategory=escape(p.get("subcategory", "")),
+            title=escape(p.get("title", "")[:100] + ("..." if len(p.get("title", "")) > 100 else "")),
+            journal=escape(p.get("journal", "")),
+            study_type=escape(p.get("study_type", "")),
+            headline=escape(p.get("headline", "")),
         )
     if len(papers) > max_papers:
         paper_html += (f'<p style="font-size:11px;color:#6B7280;margin:6px 0 0 4px;">'
@@ -153,18 +152,21 @@ def send_digest_smtp(
     smtp_password: str,
     smtp_host: str = "smtp.gmail.com",
     smtp_port: int = 587,
-):
+    days_back: int = 7,
+) -> list[str]:
     """
     Send the digest to a list of recipients via SMTP.
     Each recipient gets their own individual email (BCC-style privacy).
+    Returns the recipients the email could not be sent to.
     """
     end_date   = datetime.now()
-    start_date = end_date - timedelta(days=7)
+    start_date = end_date - timedelta(days=days_back)
     subject    = (f"GI Research Digest | "
                   f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}")
 
     html_body = build_html_body(digest_data)
-    pdf_bytes = open(pdf_path, "rb").read()
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
     pdf_filename = Path(pdf_path).name
 
     total     = len(recipient_emails)
@@ -181,10 +183,15 @@ def send_digest_smtp(
             if not recipient:
                 continue
             try:
-                msg = MIMEMultipart("alternative")
+                # multipart/mixed holding (text + HTML alternatives) + the PDF.
+                # Putting the PDF inside "alternative" (as before) tells mail
+                # clients it is a third version of the body, so some show the
+                # PDF instead of the HTML or hide the attachment.
+                msg = MIMEMultipart("mixed")
                 msg["Subject"] = subject
                 msg["From"]    = sender_email
                 msg["To"]      = recipient
+                body = MIMEMultipart("alternative")
 
                 plain = (
                     f"Your weekly GI Research Digest is attached.\n\n"
@@ -194,14 +201,13 @@ def send_digest_smtp(
                     f"Endoscopy: {len(digest_data.get('endoscopy', []))} papers\n\n"
                     f"Please open the attached PDF for full summaries."
                 )
-                msg.attach(MIMEText(plain, "plain"))
-                msg.attach(MIMEText(html_body, "html"))
+                body.attach(MIMEText(plain, "plain", "utf-8"))
+                body.attach(MIMEText(html_body, "html", "utf-8"))
+                msg.attach(body)
 
                 # Attach PDF
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(pdf_bytes)
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", f'attachment; filename="{pdf_filename}"')
+                part = MIMEApplication(pdf_bytes, _subtype="pdf")
+                part.add_header("Content-Disposition", "attachment", filename=pdf_filename)
                 msg.attach(part)
 
                 server.sendmail(sender_email, recipient, msg.as_string())
@@ -215,3 +221,4 @@ def send_digest_smtp(
     print(f"\n📧 Email summary: {successes}/{total} sent successfully")
     if failures:
         print(f"   Failed recipients: {', '.join(failures)}")
+    return failures

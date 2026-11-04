@@ -16,7 +16,11 @@ from reportlab.platypus import (
 from reportlab.platypus.flowables import BalancedColumns
 from reportlab.lib.colors import HexColor
 from datetime import datetime, timedelta
+from xml.sax.saxutils import escape
 import os
+
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 NAVY       = HexColor("#1B3A5C")
@@ -37,11 +41,44 @@ BLACK      = colors.black
 W, H = A4
 MARGIN = 18 * mm
 
+# Helvetica has no star or dot glyphs, so those characters came out as black
+# boxes. Embed DejaVu Sans for the symbols when the system has it (GitHub's
+# Ubuntu runners do); otherwise leave the symbols out rather than print boxes.
+_SYMBOL_FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/Library/Fonts/DejaVuSans.ttf",
+]
+
+
+def _symbol(char: str) -> str:
+    return f'<font name="SymbolFont">{char}</font>' if _HAS_SYMBOL_FONT else ""
+
+
+_HAS_SYMBOL_FONT = False
+for _path in _SYMBOL_FONT_PATHS:
+    if os.path.exists(_path):
+        pdfmetrics.registerFont(TTFont("SymbolFont", _path))
+        _HAS_SYMBOL_FONT = True
+        break
+
+STAR = _symbol("★")
+DOT  = _symbol("●")
+
 QUALITY_COLOURS = {
-    "high":        (GREEN_FLAG, "● High Quality"),
-    "moderate":    (AMBER_FLAG, "● Moderate"),
-    "preliminary": (RED_FLAG,   "● Preliminary"),
+    "high":        (GREEN_FLAG, f"{DOT} High Quality"),
+    "moderate":    (AMBER_FLAG, f"{DOT} Moderate"),
+    "preliminary": (RED_FLAG,   f"{DOT} Preliminary"),
 }
+
+
+def esc(value) -> str:
+    """Escape text from PubMed or the model for ReportLab's mini-markup.
+
+    Unescaped, "p<0.001" or "R&D" is read as markup: text is silently dropped
+    or mangled, and some strings (e.g. "<b") crash the whole PDF build.
+    """
+    return escape(str(value or ""))
 
 
 # ── Style sheet ────────────────────────────────────────────────────────────────
@@ -277,7 +314,7 @@ def highlights_box(papers, styles, colour, bg):
         high_quality = papers[:3]
 
     elements = []
-    title_data = [[Paragraph("⭐  Top Highlights This Week", ParagraphStyle(
+    title_data = [[Paragraph(f"{STAR}  Top Highlights This Week", ParagraphStyle(
         "ht", fontSize=10.5, textColor=colour, fontName="Helvetica-Bold"
     ))]]
     title_row = Table(title_data, colWidths=[W - 2 * MARGIN])
@@ -292,7 +329,7 @@ def highlights_box(papers, styles, colour, bg):
 
     rows = []
     for p in high_quality:
-        bullet = f"<b>{p.get('subcategory','')}</b>  {p.get('headline','')}"
+        bullet = f"<b>{esc(p.get('subcategory'))}</b>  {esc(p.get('headline'))}"
         rows.append([Paragraph(bullet, styles["highlight_body"])])
 
     content = Table(rows, colWidths=[W - 2 * MARGIN])
@@ -314,13 +351,13 @@ def paper_card(paper, styles):
 
     # Quality badge
     qf = paper.get("quality_flag", "moderate")
-    q_colour, q_label = QUALITY_COLOURS.get(qf, (AMBER_FLAG, "● Moderate"))
+    q_colour, q_label = QUALITY_COLOURS.get(qf, QUALITY_COLOURS["moderate"])
     badge_style = ParagraphStyle("badge", fontSize=7.5, textColor=q_colour,
                                   fontName="Helvetica-Bold")
 
     # Header row: subcategory tag + quality badge
     header_data = [[
-        Paragraph(f"[{paper.get('subcategory', '')}]", ParagraphStyle(
+        Paragraph(f"[{esc(paper.get('subcategory'))}]", ParagraphStyle(
             "tag", fontSize=8, textColor=TEAL, fontName="Helvetica-Bold"
         )),
         Paragraph(q_label, badge_style),
@@ -337,31 +374,32 @@ def paper_card(paper, styles):
     elements.append(header)
 
     # Title
-    elements.append(Paragraph(paper.get("title", ""), styles["paper_title"]))
+    elements.append(Paragraph(esc(paper.get("title")), styles["paper_title"]))
 
     # Meta line
-    meta = f"{paper.get('authors','')}  ·  <i>{paper.get('journal','')}</i>  ·  {paper.get('pub_date','')}  ·  {paper.get('study_type','')}"
+    meta = (f"{esc(paper.get('authors'))}  ·  <i>{esc(paper.get('journal'))}</i>  ·  "
+            f"{esc(paper.get('pub_date'))}  ·  {esc(paper.get('study_type'))}")
     elements.append(Paragraph(meta, styles["meta"]))
 
     # Headline
     elements.append(Paragraph(
-        f"<b>Finding:</b>  {paper.get('headline', '')}",
+        f"<b>Finding:</b>  {esc(paper.get('headline'))}",
         styles["body"]
     ))
 
     # Key findings
     if paper.get("key_findings"):
         elements.append(Paragraph("<b>Key findings:</b>", styles["label"]))
-        elements.append(Paragraph(paper["key_findings"], styles["body"]))
+        elements.append(Paragraph(esc(paper["key_findings"]), styles["body"]))
 
     # Clinical relevance
     if paper.get("clinical_relevance"):
         elements.append(Paragraph("<b>Clinical relevance:</b>", styles["label"]))
-        elements.append(Paragraph(paper["clinical_relevance"], styles["body"]))
+        elements.append(Paragraph(esc(paper["clinical_relevance"]), styles["body"]))
 
     # PubMed link
     elements.append(Paragraph(
-        f'<link href="{paper.get("url","")}" color="#0B7285">View on PubMed ↗</link>',
+        f'<link href="{esc(paper.get("url"))}" color="#0B7285">View on PubMed &gt;</link>',
         ParagraphStyle("link", fontSize=8.5, textColor=TEAL, spaceAfter=6)
     ))
 
@@ -379,7 +417,7 @@ def practice_changing_card(paper, styles):
     elements = []
 
     # Gold header banner
-    banner_text = "★★★  NOTABLE  ★★★"
+    banner_text = f"{STAR * 3}  NOTABLE  {STAR * 3}"
     banner_data = [[Paragraph(banner_text, ParagraphStyle(
         "pc_banner", fontSize=10, textColor=WHITE, fontName="Helvetica-Bold",
         alignment=TA_CENTER, leading=14
@@ -398,21 +436,21 @@ def practice_changing_card(paper, styles):
 
     # Title row
     content_rows.append([Paragraph(
-        paper.get("title", ""),
+        esc(paper.get("title")),
         ParagraphStyle("pc_title", fontSize=10.5, textColor=DARK_GOLD,
                        fontName="Helvetica-Bold", leading=14, spaceAfter=2)
     )])
 
     # Meta
-    meta = (f"{paper.get('authors','')}  ·  <i>{paper.get('journal','')}</i>  ·  "
-            f"{paper.get('pub_date','')}  ·  {paper.get('study_type','')}")
+    meta = (f"{esc(paper.get('authors'))}  ·  <i>{esc(paper.get('journal'))}</i>  ·  "
+            f"{esc(paper.get('pub_date'))}  ·  {esc(paper.get('study_type'))}")
     content_rows.append([Paragraph(meta, ParagraphStyle(
         "pc_meta", fontSize=8.5, textColor=MID_GREY, leading=12, spaceAfter=5
     ))])
 
     # Headline finding
     content_rows.append([Paragraph(
-        f"<b>Finding:</b>  {paper.get('headline','')}",
+        f"<b>Finding:</b>  {esc(paper.get('headline'))}",
         ParagraphStyle("pc_body", fontSize=9.5, textColor=HexColor("#374151"),
                        leading=14, spaceAfter=4, alignment=TA_JUSTIFY)
     )])
@@ -425,7 +463,7 @@ def practice_changing_card(paper, styles):
                            fontName="Helvetica-Bold", leading=12, spaceAfter=1)
         )])
         content_rows.append([Paragraph(
-            paper["key_findings"],
+            esc(paper["key_findings"]),
             ParagraphStyle("pc_body2", fontSize=9.5, textColor=HexColor("#374151"),
                            leading=14, spaceAfter=4, alignment=TA_JUSTIFY)
         )])
@@ -433,7 +471,7 @@ def practice_changing_card(paper, styles):
     # Practice-changing rationale — the special box-within-box
     if paper.get("practice_changing_reason"):
         reason_data = [[Paragraph(
-            f"<b>Why this is notable:</b>  {paper['practice_changing_reason']}",
+            f"<b>Why this is notable:</b>  {esc(paper['practice_changing_reason'])}",
             ParagraphStyle("pc_reason", fontSize=9.5, textColor=DEEP_GOLD,
                            leading=14, alignment=TA_JUSTIFY)
         )]]
@@ -450,7 +488,7 @@ def practice_changing_card(paper, styles):
 
     # PubMed link
     content_rows.append([Paragraph(
-        f'<link href="{paper.get("url","")}" color="#C8860A">View on PubMed ↗</link>',
+        f'<link href="{esc(paper.get("url"))}" color="#C8860A">View on PubMed &gt;</link>',
         ParagraphStyle("pc_link", fontSize=8.5, textColor=GOLD, spaceAfter=2)
     )])
 
@@ -477,11 +515,11 @@ def guideline_card(guideline, styles):
     # Society badge + title row
     header_data = [[
         Paragraph(
-            f"[{guideline.get('subcategory', 'Guideline')}]",
+            f"[{esc(guideline.get('subcategory') or 'Guideline')}]",
             ParagraphStyle("gl_tag", fontSize=8, textColor=NAVY,
                            fontName="Helvetica-Bold")
         ),
-        Paragraph("📋 New Guideline", ParagraphStyle(
+        Paragraph("New Guideline", ParagraphStyle(
             "gl_badge", fontSize=8, textColor=NAVY,
             fontName="Helvetica-Bold", alignment=TA_RIGHT
         )),
@@ -497,25 +535,25 @@ def guideline_card(guideline, styles):
     ]))
     elements.append(header)
 
-    elements.append(Paragraph(guideline.get("title", ""), styles["paper_title"]))
+    elements.append(Paragraph(esc(guideline.get("title")), styles["paper_title"]))
 
-    meta = (f"{guideline.get('authors','')}  ·  <i>{guideline.get('journal','')}</i>  ·  "
-            f"{guideline.get('pub_date','')}")
+    meta = (f"{esc(guideline.get('authors'))}  ·  <i>{esc(guideline.get('journal'))}</i>  ·  "
+            f"{esc(guideline.get('pub_date'))}")
     elements.append(Paragraph(meta, styles["meta"]))
 
     if guideline.get("headline"):
         elements.append(Paragraph(
-            f"<b>Summary:</b>  {guideline['headline']}", styles["body"]
+            f"<b>Summary:</b>  {esc(guideline['headline'])}", styles["body"]
         ))
     if guideline.get("key_findings"):
         elements.append(Paragraph("<b>Key recommendations:</b>", styles["label"]))
-        elements.append(Paragraph(guideline["key_findings"], styles["body"]))
+        elements.append(Paragraph(esc(guideline["key_findings"]), styles["body"]))
     if guideline.get("clinical_relevance"):
         elements.append(Paragraph("<b>Clinical relevance:</b>", styles["label"]))
-        elements.append(Paragraph(guideline["clinical_relevance"], styles["body"]))
+        elements.append(Paragraph(esc(guideline["clinical_relevance"]), styles["body"]))
 
     elements.append(Paragraph(
-        f'<link href="{guideline.get("url","")}" color="#0B7285">View on PubMed ↗</link>',
+        f'<link href="{esc(guideline.get("url"))}" color="#0B7285">View on PubMed &gt;</link>',
         ParagraphStyle("link", fontSize=8.5, textColor=TEAL, spaceAfter=6)
     ))
     elements.append(HRFlowable(width="100%", thickness=0.5, color=LIGHT_GREY, spaceAfter=6))
@@ -526,12 +564,11 @@ def guideline_card(guideline, styles):
 def guidelines_section(guidelines, styles):
     """Full guidelines section block."""
     elements = []
-    elements.append(PageBreak())
 
     # Section header — deep navy/purple to distinguish
     GUIDELINE_COLOUR = HexColor("#3B1F6B")
     header_data = [[
-        Paragraph("Section 3: New Society Guidelines", ParagraphStyle(
+        Paragraph("Section 5: New Society Guidelines", ParagraphStyle(
             "gh", fontSize=18, textColor=WHITE, fontName="Helvetica-Bold", leading=22
         )),
         Paragraph(f"{len(guidelines)} guideline{'s' if len(guidelines) != 1 else ''}",
@@ -588,7 +625,7 @@ def render_papers(papers, story, styles):
 
     groups = group_by_subcategory(regular_papers)
     for subcategory, grp_papers in sorted(groups.items()):
-        story.append(Paragraph(subcategory, styles["subsection"]))
+        story.append(Paragraph(esc(subcategory), styles["subsection"]))
         story.append(HRFlowable(width="100%", thickness=1, color=TEAL, spaceAfter=4))
         for paper in grp_papers:
             story.append(paper_card(paper, styles))
@@ -604,7 +641,6 @@ def generate_pdf(digest_data: dict, output_path: str) -> str:
     Returns the output path.
     """
     styles = build_styles()
-    hepatology = digest_data.get("hepatology", [])
     hepatology = digest_data.get("hepatology", [])
     luminal    = digest_data.get("luminal", [])
     hpb        = digest_data.get("hpb", [])

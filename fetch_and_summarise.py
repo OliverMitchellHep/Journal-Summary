@@ -7,16 +7,16 @@ Paper limits: 10 hepatology+HPB, 5 luminal GI, 5 endoscopy = 20 total
 Focus: clinical studies (RCTs, cohorts, meta-analyses). Molecular/basic science excluded.
 """
 
-import time
-import json
 import requests
+import anthropic
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Literal, Optional
+from pydantic import BaseModel
 
 # ── Journal list ───────────────────────────────────────────────────────────────
 JOURNALS = [
-    "Gut", "Front Gastroenterol", "BMJ Open Gastroenterol",
+    "Gut", "Frontline Gastroenterol", "BMJ Open Gastroenterol",
     "Gastroenterology", "Am J Gastroenterol", "Clin Gastroenterol Hepatol",
     "N Engl J Med", "Lancet", "Lancet Gastroenterol Hepatol", "BMJ", "Nat Med",
     "J Hepatol", "JHEP Rep", "Hepatology", "Liver Int", "Aliment Pharmacol Ther",
@@ -30,12 +30,12 @@ JOURNAL_PRIORITY = {
     "Lancet Gastroenterol Hepatol": 1,
     "Am J Gastroenterol": 2, "Hepatology": 2, "JHEP Rep": 2,
     "Clin Gastroenterol Hepatol": 2, "Endoscopy": 2, "Aliment Pharmacol Ther": 2,
-    "Front Gastroenterol": 3, "BMJ Open Gastroenterol": 3, "Liver Int": 3,
+    "Frontline Gastroenterol": 3, "BMJ Open Gastroenterol": 3, "Liver Int": 3,
     "United European Gastroenterol J": 3, "Colorectal Dis": 3, "Endosc Int Open": 3,
 }
 
 UK_JOURNALS = {
-    "Gut", "Front Gastroenterol", "BMJ Open Gastroenterol", "Lancet",
+    "Gut", "Frontline Gastroenterol", "BMJ Open Gastroenterol", "Lancet",
     "Lancet Gastroenterol Hepatol", "BMJ", "Aliment Pharmacol Ther", "Colorectal Dis",
 }
 
@@ -48,7 +48,6 @@ LIMITS = {
 }
 
 PUBMED_BASE     = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-ANTHROPIC_API   = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-sonnet-5-5"
 
 
@@ -62,10 +61,12 @@ def build_query(days_back: int = 7) -> str:
     return f"({journal_clause}) AND {date_range}"
 
 
-def search_pubmed(query: str, max_results: int = 200) -> list[str]:
+def search_pubmed(query: str, max_results: int = 2000) -> list[str]:
+    # A week across these journals is typically 250-600 records, so the limit
+    # must sit well above that: anything past it is dropped before the
+    # journal-priority sort ever sees it.
     params = {
-        "db": "pubmed", "term": query, "retmax": max_results,
-        "retmode": "json", "usehistory": "y",
+        "db": "pubmed", "term": query, "retmax": max_results, "retmode": "json",
     }
     r = requests.get(f"{PUBMED_BASE}/esearch.fcgi", params=params, timeout=30)
     r.raise_for_status()
@@ -75,8 +76,9 @@ def search_pubmed(query: str, max_results: int = 200) -> list[str]:
 def fetch_abstracts(pmids: list[str]) -> list[dict]:
     if not pmids:
         return []
-    params = {"db": "pubmed", "id": ",".join(pmids), "retmode": "xml", "rettype": "abstract"}
-    r = requests.get(f"{PUBMED_BASE}/efetch.fcgi", params=params, timeout=60)
+    # POST, not GET: several hundred IDs make the URL too long for a GET.
+    data = {"db": "pubmed", "id": ",".join(pmids), "retmode": "xml", "rettype": "abstract"}
+    r = requests.post(f"{PUBMED_BASE}/efetch.fcgi", data=data, timeout=120)
     r.raise_for_status()
     return parse_pubmed_xml(r.text)
 
@@ -100,20 +102,26 @@ def parse_pubmed_xml(xml_text: str) -> list[dict]:
             journal_abbr    = journal_abbr_el.text if journal_abbr_el is not None else ""
             journal_full_el = art.find(".//Journal/Title")
             journal_full    = journal_full_el.text if journal_full_el is not None else journal_abbr
+            # MedlineTA is the same abbreviation the [ta] search used, so it
+            # matches the JOURNALS / JOURNAL_PRIORITY keys exactly.
+            medline_ta = medline.findtext("MedlineJournalInfo/MedlineTA", "") or journal_abbr
 
             authors = []
             for author in art.findall(".//Author"):
                 ln = author.find("LastName")
                 fn = author.find("ForeName")
-                if ln is not None:
+                if ln is not None and ln.text:
                     name = ln.text
-                    if fn is not None:
+                    if fn is not None and fn.text:
                         name += f" {fn.text[0]}"
                     authors.append(name)
             author_str = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
 
             pub_date     = medline.find(".//PubDate")
-            pub_date_str = f"{pub_date.findtext('Month', '')} {pub_date.findtext('Year', '')}".strip()
+            pub_date_str = ""
+            if pub_date is not None:
+                pub_date_str = (f"{pub_date.findtext('Month', '')} {pub_date.findtext('Year', '')}".strip()
+                                or pub_date.findtext("MedlineDate", ""))
 
             pmid_el = medline.find("PMID")
             pmid    = pmid_el.text if pmid_el is not None else ""
@@ -134,17 +142,10 @@ def parse_pubmed_xml(xml_text: str) -> list[dict]:
             if len(abstract) < 100:
                 continue
 
-            # Journal priority scoring
-            priority = 3
-            is_uk    = False
-            for j, p in JOURNAL_PRIORITY.items():
-                if j.lower() in journal_full.lower() or j.lower() in journal_abbr.lower():
-                    priority = p
-                    break
-            for j in UK_JOURNALS:
-                if j.lower() in journal_full.lower() or j.lower() in journal_abbr.lower():
-                    is_uk = True
-                    break
+            # Journal priority scoring. Exact match: a substring match put every
+            # title containing "Gastroenterology" or "BMJ" into the top tier.
+            priority = JOURNAL_PRIORITY.get(medline_ta, 3)
+            is_uk    = medline_ta in UK_JOURNALS
 
             articles.append({
                 "pmid": pmid, "title": title, "authors": author_str,
@@ -166,7 +167,7 @@ def parse_pubmed_xml(xml_text: str) -> list[dict]:
 SYSTEM_PROMPT = """You are a specialist medical AI assistant helping a UK NHS consultant gastroenterologist 
 stay up to date with research. You will be given a paper title and abstract.
 
-Return ONLY valid JSON (no markdown fences, no preamble) with this exact schema:
+Return JSON with this exact schema:
 {
   "category": "hepatology" | "luminal" | "hpb" | "endoscopy" | "exclude" | "guideline",
   "subcategory": string,
@@ -235,40 +236,60 @@ what has changed, and what a clinician should now do differently.
 If false, set to ""."""
 
 
-def summarise_paper(paper: dict, api_key: str) -> Optional[dict]:
-    """Call Claude Sonnet to categorise and summarise a paper."""
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    body = {
-        "model": ANTHROPIC_MODEL,
-        "max_tokens": 700,
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"}],
-    }
+class PaperSummary(BaseModel):
+    """Schema the model must answer in. Structured outputs enforce it, so the
+    reply always parses."""
+    category: Literal["hepatology", "luminal", "hpb", "endoscopy", "exclude", "guideline"]
+    subcategory: str
+    headline: str
+    key_findings: str
+    clinical_relevance: str
+    study_type: str
+    quality_flag: Literal["high", "moderate", "preliminary"]
+    practice_changing: bool
+    practice_changing_reason: str
 
-    for attempt in range(3):
-        try:
-            r = requests.post(ANTHROPIC_API, headers=headers, json=body, timeout=60)
-            r.raise_for_status()
-            raw = r.json()["content"][0]["text"].strip()
-            raw = raw.replace("```json", "").replace("```", "").strip()
-            summary = json.loads(raw)
-            paper.update(summary)
-            return paper
-        except Exception as e:
-            if attempt == 2:
-                print(f"  ✗ Failed: {e}")
-                return None
-            time.sleep(2 ** attempt)
-    return None
+
+def summarise_paper(paper: dict, client: anthropic.Anthropic) -> Optional[dict]:
+    """Call Claude Sonnet to categorise and summarise a paper.
+
+    Returns the paper with the summary fields added, or None if the paper
+    could not be summarised (refusal, truncated reply). API errors such as a
+    bad key or no credit are raised so the caller can stop the run.
+    """
+    response = client.beta.messages.parse(
+        model=ANTHROPIC_MODEL,
+        # Thinking is on by default on this model and counts toward
+        # max_tokens, so leave room for it as well as the JSON reply.
+        max_tokens=4000,
+        output_config={"effort": "low"},
+        output_format=PaperSummary,
+        # If a safety classifier declines a paper, retry it on Anthropic's
+        # recommended fallback model instead of losing the paper.
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"}],
+    )
+
+    if response.stop_reason == "refusal":
+        print("  ✗ Skipped: the model declined to summarise this paper")
+        return None
+    if response.stop_reason == "max_tokens" or response.parsed_output is None:
+        print(f"  ✗ Skipped: incomplete reply (stop_reason={response.stop_reason})")
+        return None
+
+    paper.update(response.parsed_output.model_dump())
+    return paper
 
 
 # ── Main orchestrator ──────────────────────────────────────────────────────────
 
 def run_digest(api_key: str, days_back: int = 7) -> dict:
+    # The SDK retries rate limits (429), overloads (529) and other transient
+    # errors with backoff on its own.
+    client = anthropic.Anthropic(api_key=api_key, max_retries=5)
+
     print(f"🔍 Searching PubMed for past {days_back} days across {len(JOURNALS)} journals...")
     pmids = search_pubmed(build_query(days_back))
     print(f"   Found {len(pmids)} articles")
@@ -284,6 +305,8 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
     print("🤖 Summarising with Claude Sonnet 5.5...")
     hepatology, luminal, hpb, endoscopy, guidelines = [], [], [], [], []
     excluded = 0
+    summarised = 0
+    failed = 0
 
     for i, paper in enumerate(articles):
         # Stop early once all sections are full
@@ -295,10 +318,24 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
             break
 
         print(f"   [{i+1}/{len(articles)}] {paper['title'][:70]}...")
-        result = summarise_paper(paper, api_key)
-        time.sleep(0.3)
+        try:
+            result = summarise_paper(paper, client)
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
+                anthropic.NotFoundError, anthropic.BadRequestError):
+            # Bad key, no access to the model, no credit or a malformed
+            # request: every later paper would fail the same way, so stop now
+            # rather than emailing an empty digest.
+            raise
+        except anthropic.APIError as e:
+            print(f"  ✗ Failed: {e}")
+            result = None
         if result is None:
+            failed += 1
+            if summarised == 0 and failed >= 5:
+                raise RuntimeError("The first 5 papers all failed to summarise - stopping. "
+                                   "Check the Anthropic API status and the errors above.")
             continue
+        summarised += 1
 
         cat = result.get("category", "exclude")
 
@@ -339,6 +376,7 @@ def run_digest(api_key: str, days_back: int = 7) -> dict:
         "metadata": {
             "total_fetched":  len(articles),
             "excluded":       excluded,
+            "failed":         failed,
             "generated_at":   datetime.now().isoformat(),
             "period_days":    days_back,
         }
