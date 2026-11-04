@@ -415,6 +415,11 @@ def highlights_box(papers, styles, colour, bg):
 
 def paper_card(paper, styles):
     """Returns a KeepTogether block for a single paper."""
+    return KeepTogether(paper_card_elements(paper, styles))
+
+
+def paper_card_elements(paper, styles):
+    """The flowables that make up one paper card."""
     elements = []
 
     # Quality badge
@@ -474,7 +479,7 @@ def paper_card(paper, styles):
     # Divider
     elements.append(HRFlowable(width="100%", thickness=0.5, color=RULE, spaceAfter=6))
 
-    return KeepTogether(elements)
+    return elements
 
 
 def practice_changing_card(paper, styles):
@@ -678,9 +683,15 @@ def render_papers(papers, story, styles):
 
     groups = group_by_subcategory(regular_papers)
     for subcategory, grp_papers in sorted(groups.items()):
-        story.append(Paragraph(esc(subcategory), styles["subsection"]))
-        story.append(HRFlowable(width="100%", thickness=1, color=BLUE, spaceAfter=4))
-        for paper in grp_papers:
+        # Keep the heading on the same page as its first paper, so it isn't
+        # left stranded at the foot of a page. (A flat list: nesting one
+        # KeepTogether inside another makes ReportLab start a new page.)
+        story.append(KeepTogether([
+            Paragraph(esc(subcategory), styles["subsection"]),
+            HRFlowable(width="100%", thickness=1, color=BLUE, spaceAfter=4),
+            *paper_card_elements(grp_papers[0], styles),
+        ]))
+        for paper in grp_papers[1:]:
             story.append(paper_card(paper, styles))
 
 

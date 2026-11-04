@@ -34,6 +34,26 @@ JOURNAL_PRIORITY = {
     "United European Gastroenterol J": 3, "Colorectal Dis": 3, "Endosc Int Open": 3,
 }
 
+# Readable names for the digest. PubMed's own journal titles are catalogue
+# entries such as "Lancet (London, England)" or "Clinical gastroenterology and
+# hepatology : the official clinical practice journal of the ...".
+JOURNAL_NAMES = {
+    "Gut": "Gut", "Frontline Gastroenterol": "Frontline Gastroenterology",
+    "BMJ Open Gastroenterol": "BMJ Open Gastroenterology",
+    "Gastroenterology": "Gastroenterology",
+    "Am J Gastroenterol": "American Journal of Gastroenterology",
+    "Clin Gastroenterol Hepatol": "Clinical Gastroenterology and Hepatology",
+    "N Engl J Med": "New England Journal of Medicine", "Lancet": "The Lancet",
+    "Lancet Gastroenterol Hepatol": "Lancet Gastroenterology & Hepatology",
+    "BMJ": "BMJ", "Nat Med": "Nature Medicine", "J Hepatol": "Journal of Hepatology",
+    "JHEP Rep": "JHEP Reports", "Hepatology": "Hepatology",
+    "Liver Int": "Liver International",
+    "Aliment Pharmacol Ther": "Alimentary Pharmacology & Therapeutics",
+    "United European Gastroenterol J": "United European Gastroenterology Journal",
+    "Colorectal Dis": "Colorectal Disease", "Endoscopy": "Endoscopy",
+    "Endosc Int Open": "Endoscopy International Open",
+}
+
 UK_JOURNALS = {
     "Gut", "Frontline Gastroenterol", "BMJ Open Gastroenterol", "Lancet",
     "Lancet Gastroenterol Hepatol", "BMJ", "Aliment Pharmacol Ther", "Colorectal Dis",
@@ -147,10 +167,14 @@ def parse_pubmed_xml(xml_text: str) -> list[dict]:
             priority = JOURNAL_PRIORITY.get(medline_ta, 3)
             is_uk    = medline_ta in UK_JOURNALS
 
+            # The abstract cap is 8000 characters: Lancet-style structured
+            # abstracts often run past 3000, and a 3000 cap cut off their
+            # Findings section before the model saw it.
             articles.append({
                 "pmid": pmid, "title": title, "authors": author_str,
-                "journal": journal_full, "journal_abbr": journal_abbr,
-                "pub_date": pub_date_str, "abstract": abstract[:3000],
+                "journal": JOURNAL_NAMES.get(medline_ta, journal_full),
+                "journal_abbr": medline_ta,
+                "pub_date": pub_date_str, "abstract": abstract[:8000],
                 "doi": doi, "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
                 "_priority": priority, "_is_uk": is_uk,
             })
