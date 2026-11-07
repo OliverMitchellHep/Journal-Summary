@@ -32,16 +32,18 @@ def main():
     api_key       = os.environ.get("ANTHROPIC_API_KEY")
     sender_email  = os.environ.get("SENDER_EMAIL")
     smtp_password = os.environ.get("SMTP_PASSWORD")
-    smtp_host     = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-    smtp_port     = int(os.environ.get("SMTP_PORT", "587"))
-    days_back     = int(os.environ.get("DAYS_BACK", "7"))
+    # `or` rather than a get() default: GitHub Actions sets an unset secret to
+    # an empty string, which would otherwise crash int("") or point SMTP at "".
+    smtp_host     = os.environ.get("SMTP_HOST") or "smtp.gmail.com"
+    smtp_port     = int(os.environ.get("SMTP_PORT") or "587")
+    days_back     = int(os.environ.get("DAYS_BACK") or "7")
 
     # ── Mailing list: RECIPIENT_EMAILS takes priority over RECIPIENT_EMAIL ─────
     recipient_emails_raw = os.environ.get("RECIPIENT_EMAILS", "")
     if recipient_emails_raw:
         recipient_emails = [e.strip() for e in recipient_emails_raw.split(",") if e.strip()]
     else:
-        single = os.environ.get("RECIPIENT_EMAIL", sender_email)
+        single = os.environ.get("RECIPIENT_EMAIL") or sender_email
         recipient_emails = [single] if single else []
 
     if not api_key:
@@ -78,7 +80,7 @@ def main():
 
     # 3. Send to mailing list
     print(f"\n📧 Sending to {len(recipient_emails)} recipient(s)...")
-    send_digest_smtp(
+    failures = send_digest_smtp(
         digest_data=digest_data,
         pdf_path=str(pdf_path),
         recipient_emails=recipient_emails,
@@ -86,7 +88,12 @@ def main():
         smtp_password=smtp_password,
         smtp_host=smtp_host,
         smtp_port=smtp_port,
+        days_back=days_back,
     )
+    if failures:
+        # Fail the run so GitHub emails the repo owner about it.
+        print(f"❌ Could not send to {len(failures)} of {len(recipient_emails)} recipient(s)")
+        sys.exit(1)
 
     print("\n🎉 Digest complete!\n")
 

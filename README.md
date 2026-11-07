@@ -1,7 +1,7 @@
 # GI Research Digest
 
 Automated weekly literature review for gastroenterology and hepatology.
-Fetches new papers from 20 high-impact journals, summarises each with Claude AI,
+Fetches new papers from 20 high-impact journals, summarises each with Claude Sonnet 5.5,
 and emails a formatted PDF every Friday afternoon.
 
 ---
@@ -16,8 +16,8 @@ PubMed API          Claude API           ReportLab           SMTP
 
 1. **Fetch** – Queries PubMed for papers published in the past 7 days across 20 journals
 2. **Filter** – Removes letters, editorials, errata, and papers with no abstract
-3. **Summarise** – Claude categorises each paper (hepatology / luminal GI) and generates: headline finding, key findings, clinical relevance, study type, quality rating
-4. **PDF** – ReportLab builds a clean A4 digest with two sections, highlights boxes, and quality badges
+3. **Summarise** – Claude categorises each paper (hepatology / luminal GI / HPB / endoscopy / guideline, or excludes it) and generates: headline finding, key findings, clinical relevance, study type, quality rating, and whether it is **Notable**
+4. **PDF** – ReportLab builds a clean A4 digest with five sections, highlights boxes, quality badges, and a gold "Notable" card for landmark papers
 5. **Email** – Sent via SMTP with HTML preview in email body and PDF attached
 
 ---
@@ -60,12 +60,11 @@ cd gi-digest
 
 ### 2. Get your API keys
 
-**Google Gemini API key (free — no credit card needed)**
-- Go to **aistudio.google.com**
-- Sign in with a Google account
-- Click **Get API Key** → **Create API key**
-- Copy the key — it looks like `AIzaSy...`
-- The free tier allows 1,500 requests/day — far more than needed for this digest
+**Anthropic API key**
+- Go to **console.anthropic.com** and sign in
+- Add credit under **Billing** (the API is pay-as-you-go)
+- Go to **API Keys** → **Create Key**
+- Copy the key — it starts with `sk-ant-`
 
 **Gmail App Password** (recommended — works reliably, free)
 - Go to your Google Account → Security → 2-Step Verification → App passwords
@@ -82,17 +81,18 @@ In your GitHub repository: Settings → Secrets and variables → Actions → Ne
 
 | Secret name | Value |
 |---|---|
-| `GEMINI_API_KEY` | Your free Gemini API key from aistudio.google.com |
+| `ANTHROPIC_API_KEY` | Your Anthropic API key from console.anthropic.com |
 | `SENDER_EMAIL` | Email to send from (e.g. yourname@gmail.com) |
 | `SMTP_PASSWORD` | App password from step 2 |
-| `RECIPIENT_EMAIL` | Email to receive digest (can be same or different) |
+| `RECIPIENT_EMAILS` | Comma-separated mailing list, e.g. `you@nhs.net,colleague@nhs.net` |
+| `RECIPIENT_EMAIL` | Single recipient (used only if `RECIPIENT_EMAILS` is not set; defaults to `SENDER_EMAIL`) |
 | `SMTP_HOST` | `smtp.gmail.com` (or `smtp.office365.com` for NHS mail) |
 | `SMTP_PORT` | `587` |
 
 ### 4. Enable GitHub Actions
 
 - Go to your repo → Actions tab → Enable workflows
-- The digest will run automatically every Friday at 17:00 UTC
+- The digest will run automatically every Friday at 15:00 UTC
 
 ### 5. Test it manually
 
@@ -105,7 +105,7 @@ In the Actions tab → "Weekly GI Research Digest" → "Run workflow" → Run
 ```bash
 pip install -r requirements.txt
 
-export GEMINI_API_KEY="AIzaSy..."
+export ANTHROPIC_API_KEY="sk-ant-..."
 export SENDER_EMAIL="you@gmail.com"
 export SMTP_PASSWORD="your-app-password"
 export RECIPIENT_EMAIL="you@nhs.net"
@@ -122,7 +122,7 @@ The PDF will also be saved to `output/GI_Digest_YYYY-MM-DD.pdf`.
 ### Change delivery schedule
 Edit `.github/workflows/weekly_digest.yml`:
 ```yaml
-- cron: "0 17 * * 5"   # Friday 17:00 UTC
+- cron: "0 15 * * 5"   # Friday 15:00 UTC (current setting)
 - cron: "0 8 * * 1"    # Monday 08:00 UTC
 - cron: "0 18 * * 0"   # Sunday 18:00 UTC
 ```
@@ -148,11 +148,23 @@ gi-digest/
 ├── generate_pdf.py          # ReportLab PDF builder
 ├── send_email.py            # SMTP email sender
 ├── requirements.txt
+├── assets/
+│   ├── brand/               # Rex Hepatis crown logo (PDF + email)
+│   └── fonts/               # Newsreader + IBM Plex Sans (SIL Open Font License)
 ├── .github/
 │   └── workflows/
 │       └── weekly_digest.yml   # GitHub Actions scheduler
 └── output/                  # PDFs saved here (gitignored)
 ```
+
+---
+
+## Branding
+
+The PDF and email use the [Rex Hepatis](https://rexhepatis.org) brand: navy `#0E1A2E`,
+blue `#2C6DBA` and gold `#C99A2E`, Newsreader headings with IBM Plex Sans text, and the
+crown logo. Colours are set at the top of `generate_pdf.py` and in the email
+template in `send_email.py`.
 
 ---
 
